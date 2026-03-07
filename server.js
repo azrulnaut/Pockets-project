@@ -203,11 +203,7 @@ app.get('/api/accounts/:id/rebalance-candidates', (req, res) => {
   }));
 
   // For negative delta: only show purposes this account actually has money in
-  const purposes = delta < 0
-    ? allPurposes.filter((p) => p.currentInAccount > 0)
-    : allPurposes;
-
-  res.json({ delta, currentTotal, newTotal, purposes });
+  res.json({ delta, currentTotal, newTotal, purposes: allPurposes });
 });
 
 // ---------------------------------------------------------------------------
@@ -216,56 +212,49 @@ app.get('/api/accounts/:id/rebalance-candidates', (req, res) => {
 // ---------------------------------------------------------------------------
 app.post('/api/accounts/:id/rebalance', (req, res) => {
   const accountDvId = parseInt(req.params.id);
-  const { newTotal, transfers } = req.body;
+  const { newTotal } = req.body;
+  const transfers = Array.isArray(req.body.transfers) ? req.body.transfers : [];
 
   if (!Number.isInteger(newTotal) || newTotal < 0) {
     return res.status(400).json({ error: 'newTotal must be a non-negative integer (cents)' });
   }
-  if (!Array.isArray(transfers) || transfers.length === 0) {
-    return res.status(400).json({ error: 'transfers array required' });
-  }
+
   for (const t of transfers) {
-    if (!Number.isInteger(t.purposeId) || !Number.isInteger(t.portion) || t.portion <= 0) {
-      return res.status(400).json({ error: 'each transfer needs purposeId and positive integer portion' });
+    if (!Number.isInteger(t.purposeId) || !Number.isInteger(t.portion) || t.portion === 0) {
+      return res.status(400).json({ error: 'each transfer needs purposeId and non-zero integer portion' });
     }
   }
 
   const currentTotal = getAccountTotal(accountDvId);
   const delta = newTotal - currentTotal;
 
-  if (delta === 0) {
-    return res.json({ ok: true, fundTotal: db.prepare('SELECT total_amount FROM funds WHERE id = ?').get(FUND_ID).total_amount });
-  }
-
-  // Validate portions sum to |delta|
+  // Net signed sum of all portions must equal delta
   const portionSum = transfers.reduce((s, t) => s + t.portion, 0);
-  if (portionSum !== Math.abs(delta)) {
+  if (portionSum !== delta) {
     return res.status(400).json({
-      error: `Portions sum (${portionSum}) must equal |delta| (${Math.abs(delta)})`,
+      error: `Portions net sum (${portionSum}) must equal delta (${delta})`,
     });
   }
 
-  // For negative delta: validate no portion exceeds what's in the account for that purpose
-  if (delta < 0) {
-    const currentInAccountStmt = db.prepare(
-      `SELECT COALESCE(SUM(s.amount), 0) AS total
-       FROM allocation_slices s
-       JOIN slice_dimensions sd1 ON sd1.slice_id = s.id AND sd1.dimension_value_id = ?
-       JOIN slice_dimensions sd2 ON sd2.slice_id = s.id AND sd2.dimension_value_id = ?
-       WHERE s.fund_id = ?`
-    );
-    for (const t of transfers) {
-      const avail = currentInAccountStmt.get(accountDvId, t.purposeId, FUND_ID).total;
-      if (t.portion > avail) {
-        return res.status(400).json({
-          error: `Reduction of ${t.portion} exceeds available ${avail} for purposeId ${t.purposeId}`,
-        });
-      }
+  // Validate reductions don't exceed what the account holds for each purpose
+  const currentInAccountStmt = db.prepare(
+    `SELECT COALESCE(SUM(s.amount), 0) AS total
+     FROM allocation_slices s
+     JOIN slice_dimensions sd1 ON sd1.slice_id = s.id AND sd1.dimension_value_id = ?
+     JOIN slice_dimensions sd2 ON sd2.slice_id = s.id AND sd2.dimension_value_id = ?
+     WHERE s.fund_id = ?`
+  );
+  for (const t of transfers.filter(t => t.portion < 0)) {
+    const avail = currentInAccountStmt.get(accountDvId, t.purposeId, FUND_ID).total;
+    if (-t.portion > avail) {
+      return res.status(400).json({
+        error: `Reduction of ${-t.portion} exceeds available ${avail} for purposeId ${t.purposeId}`,
+      });
     }
   }
 
   try {
-    const newFundTotal = executeAccountRebalance(accountDvId, transfers, delta, FUND_ID);
+    const newFundTotal = executeAccountRebalance(accountDvId, transfers, FUND_ID);
     res.json({ ok: true, fundTotal: newFundTotal });
   } catch (e) {
     res.status(500).json({ error: e.message });

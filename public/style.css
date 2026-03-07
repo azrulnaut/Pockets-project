@@ -181,13 +181,14 @@ button:hover { opacity: 0.85; }
   align-items: center;
   padding: 8px 12px;
   border-bottom: 1px solid #f0f0f0;
-  gap: 10px;
+  gap: 8px;
+  transition: background 0.1s;
 }
 .purpose-grid-row:last-child { border-bottom: none; }
-.purpose-grid-row .pg-label { flex: 1; font-size: 13px; }
-.purpose-grid-row .pg-avail { font-size: 12px; color: #888; min-width: 90px; text-align: right; }
+.purpose-grid-row .pg-label   { flex: 1; font-size: 13px; }
+.purpose-grid-row .pg-current { font-size: 12px; color: #888; min-width: 72px; text-align: right; }
 .purpose-grid-row input[type="number"] {
-  width: 100px;
+  width: 88px;
   padding: 4px 8px;
   border: 1px solid #ccc;
   border-radius: 4px;
@@ -195,6 +196,23 @@ button:hover { opacity: 0.85; }
   font-size: 13px;
   text-align: right;
 }
+/* Mode toggle buttons */
+.mode-btns { display: flex; gap: 3px; }
+.mode-btn {
+  width: 26px; height: 26px;
+  border-radius: 4px;
+  font-size: 15px; font-weight: 700;
+  padding: 0; line-height: 26px; text-align: center;
+  background: #f0f0f0; color: #bbb;
+  flex-shrink: 0;
+}
+.mode-btn.mode-plus.active  { background: #e8f4e8; color: #2d6a2d; }
+.mode-btn.mode-minus.active { background: #fde8e8; color: #8a0000; }
+/* Row colouring when a mode is active */
+.purpose-grid-row.row-plus  { background: #f6fbf6; }
+.purpose-grid-row.row-minus { background: #fdf6f6; }
+.purpose-grid-row.row-plus  input { border-color: #90c490; }
+.purpose-grid-row.row-minus input { border-color: #c49090; }
 
 .remainder-row {
   display: flex;

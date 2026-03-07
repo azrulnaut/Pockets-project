@@ -114,20 +114,19 @@ const stmts = {
 // ---------------------------------------------------------------------------
 
 /**
- * Rebalance an account to a new total.
- * delta > 0: create/grow slices for (accountDvId + purposeId); fund total grows.
- * delta < 0: shrink/delete slices for (accountDvId + purposeId); fund total shrinks.
+ * Rebalance an account.
+ * Each transfer carries a signed portion:
+ *   portion > 0 → grow/create the (account + purpose) slice (fund grows)
+ *   portion < 0 → shrink/delete the (account + purpose) slice (fund shrinks)
  * Other accounts are never touched.
- *
- * transfers: [{ purposeId, portion }] — portions are always positive; sign is
- * determined by delta.
+ * Net sum of all portions must equal the intended delta (validated by caller).
  */
-const executeAccountRebalance = db.transaction((accountDvId, transfers, delta, fundId = 1) => {
+const executeAccountRebalance = db.transaction((accountDvId, transfers, fundId = 1) => {
   for (const { purposeId, portion } of transfers) {
+    if (portion === 0) continue;
     const target = stmts.findSliceByTwoDvs.get({ a: accountDvId, b: purposeId, f: fundId });
 
-    if (delta > 0) {
-      // Adding money to this account under this purpose
+    if (portion > 0) {
       if (target) {
         stmts.addToSlice.run(portion, target.id);
       } else {
@@ -135,17 +134,16 @@ const executeAccountRebalance = db.transaction((accountDvId, transfers, delta, f
         stmts.insertSliceDim.run(lastInsertRowid, accountDvId);
         stmts.insertSliceDim.run(lastInsertRowid, purposeId);
       }
-    } else if (delta < 0) {
-      // Removing money from this account under this purpose
+    } else {
+      // portion < 0
       if (target) {
-        const newAmount = target.amount - portion;
+        const newAmount = target.amount + portion; // portion is negative
         if (newAmount <= 0) {
           stmts.deleteSlice.run(target.id);
         } else {
-          stmts.addToSlice.run(-portion, target.id);
+          stmts.addToSlice.run(portion, target.id);
         }
       }
-      // If no slice exists, nothing to reduce — safe to skip
     }
   }
   return syncFundTotal(fundId);
