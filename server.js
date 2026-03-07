@@ -20,16 +20,6 @@ const DIM_ACCOUNTS = 1;
 const DIM_PURPOSE = 2;
 
 // ---------------------------------------------------------------------------
-// In-memory rebalance history (last 10 entries)
-// ---------------------------------------------------------------------------
-const rebalanceHistory = [];
-
-function addHistory(entry) {
-  rebalanceHistory.unshift({ ...entry, timestamp: new Date().toISOString() });
-  if (rebalanceHistory.length > 10) rebalanceHistory.pop();
-}
-
-// ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
 function getAccountTotal(accountDvId) {
@@ -54,10 +44,6 @@ function getPurposeTotal(purposeDvId) {
     .get(purposeDvId, FUND_ID).total;
 }
 
-function getDvLabel(id) {
-  return db.prepare('SELECT label FROM dimension_values WHERE id = ?').get(id)?.label ?? '(unknown)';
-}
-
 // ---------------------------------------------------------------------------
 // GET /api/state
 // ---------------------------------------------------------------------------
@@ -66,13 +52,6 @@ app.get('/api/state', (req, res) => {
   const accounts = getDimensionTotals(DIM_ACCOUNTS, FUND_ID);
   const purposes = getDimensionTotals(DIM_PURPOSE, FUND_ID);
   res.json({ fund, accounts, purposes });
-});
-
-// ---------------------------------------------------------------------------
-// GET /api/history
-// ---------------------------------------------------------------------------
-app.get('/api/history', (req, res) => {
-  res.json(rebalanceHistory);
 });
 
 // ---------------------------------------------------------------------------
@@ -286,23 +265,7 @@ app.post('/api/accounts/:id/rebalance', (req, res) => {
   }
 
   try {
-    const accountLabel = getDvLabel(accountDvId);
     const newFundTotal = executeAccountRebalance(accountDvId, transfers, delta, FUND_ID);
-
-    addHistory({
-      type: 'account_rebalance',
-      accountId: accountDvId,
-      accountLabel,
-      oldTotal: currentTotal,
-      newTotal,
-      delta,
-      transfers: transfers.map((t) => ({
-        purposeId: t.purposeId,
-        purposeLabel: getDvLabel(t.purposeId),
-        portion: t.portion,
-      })),
-    });
-
     res.json({ ok: true, fundTotal: newFundTotal });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -330,19 +293,7 @@ app.post('/api/purposes/:id/transfer', (req, res) => {
   }
 
   try {
-    const fromLabel = getDvLabel(sourcePurposeId);
-    const toLabel = getDvLabel(targetPurposeId);
     executePurposeTransfer(sourcePurposeId, targetPurposeId, amount, FUND_ID);
-
-    addHistory({
-      type: 'purpose_transfer',
-      fromId: sourcePurposeId,
-      fromLabel,
-      toId: targetPurposeId,
-      toLabel,
-      amount,
-    });
-
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });

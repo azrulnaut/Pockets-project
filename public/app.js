@@ -24,11 +24,6 @@ function parseDollars(str) {
   return Math.round(v * 100);
 }
 
-function fmtTime(iso) {
-  const d = new Date(iso);
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
 // ---------------------------------------------------------------------------
 // Debounce
 // ---------------------------------------------------------------------------
@@ -67,44 +62,10 @@ async function api(method, path, body) {
 // ---------------------------------------------------------------------------
 async function loadState() {
   try {
-    [state] = await Promise.all([
-      api('GET', '/api/state'),
-    ]);
+    state = await api('GET', '/api/state');
     render();
-    renderHistory();
   } catch (e) {
     showToast('Failed to load state: ' + e.message);
-  }
-}
-
-async function renderHistory() {
-  try {
-    const history = await api('GET', '/api/history');
-    const list = document.getElementById('history-list');
-    if (!history.length) {
-      list.innerHTML = '<div class="history-empty">No rebalances yet.</div>';
-      return;
-    }
-    list.innerHTML = history.map(h => {
-      if (h.type === 'account_rebalance') {
-        const sign = h.delta > 0 ? '+' : '';
-        const details = h.transfers
-          .map(t => `${t.purposeLabel}: ${h.delta > 0 ? '+' : '−'}${fmt(t.portion)}`)
-          .join(' &nbsp;·&nbsp; ');
-        return `<div class="history-row rebalance">
-          <div class="h-time">${fmtTime(h.timestamp)}</div>
-          <div class="h-main">Account Rebalance — ${esc(h.accountLabel)} &nbsp; ${fmt(h.oldTotal)} → ${fmt(h.newTotal)} &nbsp;(${sign}${fmt(h.delta)})</div>
-          <div class="h-detail">${details}</div>
-        </div>`;
-      } else {
-        return `<div class="history-row transfer">
-          <div class="h-time">${fmtTime(h.timestamp)}</div>
-          <div class="h-main">Purpose Transfer — ${esc(h.fromLabel)} → ${esc(h.toLabel)} &nbsp; ${fmt(h.amount)}</div>
-        </div>`;
-      }
-    }).join('');
-  } catch (e) {
-    // silently ignore history errors
   }
 }
 
@@ -480,14 +441,11 @@ async function submitRebalance() {
   }
   if (transfers.length === 0) return showToast('No transfers specified');
 
-  const newTotal = parseDollars(document.getElementById('rebal-new-total')?.value);
-  if (newTotal === null) return showToast('Invalid new total');
+  const newTotal = rebalState.candidates?.newTotal;
+  if (newTotal == null) return showToast('Invalid state — please reopen the modal');
 
   try {
-    await api('POST', `/api/accounts/${rebalState.accountId}/rebalance`, {
-      newTotal,
-      transfers,
-    });
+    await api('POST', `/api/accounts/${rebalState.accountId}/rebalance`, { newTotal, transfers });
     Object.keys(sliceCache).forEach(k => delete sliceCache[k]);
     closeModal();
     await loadState();
@@ -556,6 +514,87 @@ async function submitTransfer() {
     await loadState();
   } catch (e) {
     showToast(e.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Deposit / Spend modal
+// ---------------------------------------------------------------------------
+function openDepositSpendModal(mode) {
+  const accounts = state?.accounts || [];
+  if (accounts.length === 0) return showToast('Add an account first');
+
+  const isDeposit = mode === 'deposit';
+  const eligible = isDeposit ? accounts : accounts.filter(a => a.total > 0);
+  if (eligible.length === 0) return showToast('No accounts with balance to spend from');
+
+  const accountOptions = eligible
+    .map(a => `<option value="${a.id}" data-total="${a.total}">${esc(a.label)} (${fmt(a.total)})</option>`)
+    .join('');
+
+  openModal(
+    isDeposit ? 'Deposit' : 'Spend',
+    `<div class="form-row">
+       <label>Amount ($)</label>
+       <input id="ds-amount" type="number" min="0.01" step="0.01" placeholder="0.00">
+     </div>
+     <div class="form-row">
+       <label>${isDeposit ? 'To account' : 'From account'}</label>
+       <select id="ds-account">${accountOptions}</select>
+     </div>`,
+    `<button class="btn-cancel" onclick="closeModal()">Cancel</button>
+     <button class="btn-primary" onclick="loadDepositSpendCandidates('${mode}')">Continue →</button>`
+  );
+  setTimeout(() => document.getElementById('ds-amount')?.focus(), 50);
+}
+
+async function loadDepositSpendCandidates(mode) {
+  const amountCents = parseDollars(document.getElementById('ds-amount')?.value);
+  if (!amountCents || amountCents <= 0) return showToast('Enter a valid amount');
+
+  const select = document.getElementById('ds-account');
+  const accountId = parseInt(select.value);
+  const currentTotal = parseInt(select.options[select.selectedIndex].dataset.total);
+  const accountLabel = select.options[select.selectedIndex].text.replace(/ \(.*\)$/, '');
+
+  const isDeposit = mode === 'deposit';
+  if (!isDeposit && amountCents > currentTotal) {
+    return showToast(`Cannot spend more than ${fmt(currentTotal)}`);
+  }
+
+  const newTotal = isDeposit ? currentTotal + amountCents : currentTotal - amountCents;
+  rebalState = { accountId, accountLabel, currentTotal, candidates: null };
+
+  // Show loading while fetching candidates
+  document.getElementById('modal-body').innerHTML =
+    '<div class="info-box">Loading…</div>';
+  document.getElementById('modal-actions').innerHTML =
+    '<button class="btn-cancel" onclick="closeModal()">Cancel</button>';
+
+  try {
+    const data = await api(
+      'GET',
+      `/api/accounts/${accountId}/rebalance-candidates?newTotal=${newTotal}`
+    );
+    rebalState.candidates = data;
+
+    document.getElementById('modal-title').textContent =
+      isDeposit ? `Deposit → ${accountLabel}` : `Spend ← ${accountLabel}`;
+    document.getElementById('modal-body').innerHTML = `
+      <div class="info-box">
+        ${isDeposit ? 'Depositing' : 'Spending'}: <strong>${fmt(amountCents)}</strong>
+        &nbsp;·&nbsp; New total: ${fmt(newTotal)}
+      </div>
+      <div id="rebal-candidates"></div>
+    `;
+    document.getElementById('modal-actions').innerHTML = `
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn-primary" id="rebal-confirm" onclick="submitRebalance()" disabled>Confirm</button>
+    `;
+    renderCandidates(data);
+  } catch (e) {
+    showToast(e.message);
+    closeModal();
   }
 }
 
