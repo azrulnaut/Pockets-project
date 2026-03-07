@@ -9,7 +9,6 @@ const {
   getSlicesForDimensionValue,
   executeAccountRebalance,
   executePurposeTransfer,
-  stmts,
 } = require('./db');
 
 const app = express();
@@ -19,6 +18,45 @@ app.use(express.static(path.join(__dirname, 'public')));
 const FUND_ID = 1;
 const DIM_ACCOUNTS = 1;
 const DIM_PURPOSE = 2;
+
+// ---------------------------------------------------------------------------
+// In-memory rebalance history (last 10 entries)
+// ---------------------------------------------------------------------------
+const rebalanceHistory = [];
+
+function addHistory(entry) {
+  rebalanceHistory.unshift({ ...entry, timestamp: new Date().toISOString() });
+  if (rebalanceHistory.length > 10) rebalanceHistory.pop();
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+function getAccountTotal(accountDvId) {
+  return db
+    .prepare(
+      `SELECT COALESCE(SUM(s.amount), 0) AS total
+       FROM allocation_slices s
+       JOIN slice_dimensions sd ON sd.slice_id = s.id AND sd.dimension_value_id = ?
+       WHERE s.fund_id = ?`
+    )
+    .get(accountDvId, FUND_ID).total;
+}
+
+function getPurposeTotal(purposeDvId) {
+  return db
+    .prepare(
+      `SELECT COALESCE(SUM(s.amount), 0) AS total
+       FROM allocation_slices s
+       JOIN slice_dimensions sd ON sd.slice_id = s.id AND sd.dimension_value_id = ?
+       WHERE s.fund_id = ?`
+    )
+    .get(purposeDvId, FUND_ID).total;
+}
+
+function getDvLabel(id) {
+  return db.prepare('SELECT label FROM dimension_values WHERE id = ?').get(id)?.label ?? '(unknown)';
+}
 
 // ---------------------------------------------------------------------------
 // GET /api/state
@@ -31,12 +69,18 @@ app.get('/api/state', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/history
+// ---------------------------------------------------------------------------
+app.get('/api/history', (req, res) => {
+  res.json(rebalanceHistory);
+});
+
+// ---------------------------------------------------------------------------
 // GET /api/accounts/:id/slices
 // ---------------------------------------------------------------------------
 app.get('/api/accounts/:id/slices', (req, res) => {
   const dvId = parseInt(req.params.id);
-  const slices = getSlicesForDimensionValue(dvId, DIM_PURPOSE, FUND_ID);
-  res.json(slices);
+  res.json(getSlicesForDimensionValue(dvId, DIM_PURPOSE, FUND_ID));
 });
 
 // ---------------------------------------------------------------------------
@@ -44,8 +88,7 @@ app.get('/api/accounts/:id/slices', (req, res) => {
 // ---------------------------------------------------------------------------
 app.get('/api/purposes/:id/slices', (req, res) => {
   const dvId = parseInt(req.params.id);
-  const slices = getSlicesForDimensionValue(dvId, DIM_ACCOUNTS, FUND_ID);
-  res.json(slices);
+  res.json(getSlicesForDimensionValue(dvId, DIM_ACCOUNTS, FUND_ID));
 });
 
 // ---------------------------------------------------------------------------
@@ -53,13 +96,13 @@ app.get('/api/purposes/:id/slices', (req, res) => {
 // ---------------------------------------------------------------------------
 app.post('/api/accounts', (req, res) => {
   const { label } = req.body;
-  if (!label || !label.trim()) return res.status(400).json({ error: 'label required' });
+  if (!label?.trim()) return res.status(400).json({ error: 'label required' });
   try {
     const { lastInsertRowid } = db
       .prepare('INSERT INTO dimension_values (dimension_id, label) VALUES (?, ?)')
       .run(DIM_ACCOUNTS, label.trim());
     res.json({ id: lastInsertRowid, label: label.trim() });
-  } catch (e) {
+  } catch {
     res.status(409).json({ error: 'Label already exists' });
   }
 });
@@ -69,13 +112,13 @@ app.post('/api/accounts', (req, res) => {
 // ---------------------------------------------------------------------------
 app.post('/api/purposes', (req, res) => {
   const { label } = req.body;
-  if (!label || !label.trim()) return res.status(400).json({ error: 'label required' });
+  if (!label?.trim()) return res.status(400).json({ error: 'label required' });
   try {
     const { lastInsertRowid } = db
       .prepare('INSERT INTO dimension_values (dimension_id, label) VALUES (?, ?)')
       .run(DIM_PURPOSE, label.trim());
     res.json({ id: lastInsertRowid, label: label.trim() });
-  } catch (e) {
+  } catch {
     res.status(409).json({ error: 'Label already exists' });
   }
 });
@@ -86,15 +129,13 @@ app.post('/api/purposes', (req, res) => {
 app.patch('/api/accounts/:id', (req, res) => {
   const dvId = parseInt(req.params.id);
   const { label } = req.body;
-  if (!label || !label.trim()) return res.status(400).json({ error: 'label required' });
+  if (!label?.trim()) return res.status(400).json({ error: 'label required' });
   try {
     db.prepare('UPDATE dimension_values SET label = ? WHERE id = ? AND dimension_id = ?').run(
-      label.trim(),
-      dvId,
-      DIM_ACCOUNTS
+      label.trim(), dvId, DIM_ACCOUNTS
     );
     res.json({ ok: true });
-  } catch (e) {
+  } catch {
     res.status(409).json({ error: 'Label already exists' });
   }
 });
@@ -105,16 +146,52 @@ app.patch('/api/accounts/:id', (req, res) => {
 app.patch('/api/purposes/:id', (req, res) => {
   const dvId = parseInt(req.params.id);
   const { label } = req.body;
-  if (!label || !label.trim()) return res.status(400).json({ error: 'label required' });
+  if (!label?.trim()) return res.status(400).json({ error: 'label required' });
   try {
     db.prepare('UPDATE dimension_values SET label = ? WHERE id = ? AND dimension_id = ?').run(
-      label.trim(),
-      dvId,
-      DIM_PURPOSE
+      label.trim(), dvId, DIM_PURPOSE
     );
     res.json({ ok: true });
-  } catch (e) {
+  } catch {
     res.status(409).json({ error: 'Label already exists' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /api/accounts/:id  — deletes all slices tagged with this account first
+// ---------------------------------------------------------------------------
+app.delete('/api/accounts/:id', (req, res) => {
+  const dvId = parseInt(req.params.id);
+  try {
+    db.transaction(() => {
+      db.prepare(
+        'DELETE FROM allocation_slices WHERE id IN (SELECT slice_id FROM slice_dimensions WHERE dimension_value_id = ?)'
+      ).run(dvId);
+      db.prepare('DELETE FROM dimension_values WHERE id = ? AND dimension_id = ?').run(dvId, DIM_ACCOUNTS);
+      syncFundTotal(FUND_ID);
+    })();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /api/purposes/:id  — deletes all slices tagged with this purpose first
+// ---------------------------------------------------------------------------
+app.delete('/api/purposes/:id', (req, res) => {
+  const dvId = parseInt(req.params.id);
+  try {
+    db.transaction(() => {
+      db.prepare(
+        'DELETE FROM allocation_slices WHERE id IN (SELECT slice_id FROM slice_dimensions WHERE dimension_value_id = ?)'
+      ).run(dvId);
+      db.prepare('DELETE FROM dimension_values WHERE id = ? AND dimension_id = ?').run(dvId, DIM_PURPOSE);
+      syncFundTotal(FUND_ID);
+    })();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -129,58 +206,103 @@ app.get('/api/accounts/:id/rebalance-candidates', (req, res) => {
     return res.status(400).json({ error: 'newTotal must be a non-negative integer (cents)' });
   }
 
-  const currentTotal = db
-    .prepare(
-      `SELECT COALESCE(SUM(s.amount), 0) AS total
-       FROM allocation_slices s
-       JOIN slice_dimensions sd ON sd.slice_id = s.id AND sd.dimension_value_id = ?
-       WHERE s.fund_id = ?`
-    )
-    .get(accountDvId, FUND_ID).total;
-
+  const currentTotal = getAccountTotal(accountDvId);
   const delta = newTotal - currentTotal;
 
-  const purposes = getDimensionTotals(DIM_PURPOSE, FUND_ID);
-
-  // For each purpose, compute how much is available in OTHER accounts (donatable)
-  const donatableStmt = db.prepare(
-    `SELECT COALESCE(SUM(s.amount), 0) AS donatable
+  // For each purpose, get overall total AND amount specifically within this account
+  const currentInAccountStmt = db.prepare(
+    `SELECT COALESCE(SUM(s.amount), 0) AS total
      FROM allocation_slices s
      JOIN slice_dimensions sd1 ON sd1.slice_id = s.id AND sd1.dimension_value_id = ?
-     WHERE s.fund_id = ?
-       AND NOT EXISTS (
-         SELECT 1 FROM slice_dimensions sd2
-         WHERE sd2.slice_id = s.id AND sd2.dimension_value_id = ?
-       )`
+     JOIN slice_dimensions sd2 ON sd2.slice_id = s.id AND sd2.dimension_value_id = ?
+     WHERE s.fund_id = ?`
   );
 
-  const purposesWithDonatable = purposes.map((p) => ({
+  const allPurposes = getDimensionTotals(DIM_PURPOSE, FUND_ID).map((p) => ({
     ...p,
-    donatable: donatableStmt.get(p.id, FUND_ID, accountDvId).donatable,
+    currentInAccount: currentInAccountStmt.get(accountDvId, p.id, FUND_ID).total,
   }));
 
-  res.json({ delta, currentTotal, newTotal, purposes: purposesWithDonatable });
+  // For negative delta: only show purposes this account actually has money in
+  const purposes = delta < 0
+    ? allPurposes.filter((p) => p.currentInAccount > 0)
+    : allPurposes;
+
+  res.json({ delta, currentTotal, newTotal, purposes });
 });
 
 // ---------------------------------------------------------------------------
 // POST /api/accounts/:id/rebalance
-// { transfers: [{ purposeId, portion }] }  (amounts in cents)
+// { newTotal: N, transfers: [{ purposeId, portion }] }  (all amounts in cents)
 // ---------------------------------------------------------------------------
 app.post('/api/accounts/:id/rebalance', (req, res) => {
   const accountDvId = parseInt(req.params.id);
-  const { transfers } = req.body;
+  const { newTotal, transfers } = req.body;
 
+  if (!Number.isInteger(newTotal) || newTotal < 0) {
+    return res.status(400).json({ error: 'newTotal must be a non-negative integer (cents)' });
+  }
   if (!Array.isArray(transfers) || transfers.length === 0) {
     return res.status(400).json({ error: 'transfers array required' });
   }
   for (const t of transfers) {
     if (!Number.isInteger(t.purposeId) || !Number.isInteger(t.portion) || t.portion <= 0) {
-      return res.status(400).json({ error: 'each transfer needs purposeId and positive portion' });
+      return res.status(400).json({ error: 'each transfer needs purposeId and positive integer portion' });
+    }
+  }
+
+  const currentTotal = getAccountTotal(accountDvId);
+  const delta = newTotal - currentTotal;
+
+  if (delta === 0) {
+    return res.json({ ok: true, fundTotal: db.prepare('SELECT total_amount FROM funds WHERE id = ?').get(FUND_ID).total_amount });
+  }
+
+  // Validate portions sum to |delta|
+  const portionSum = transfers.reduce((s, t) => s + t.portion, 0);
+  if (portionSum !== Math.abs(delta)) {
+    return res.status(400).json({
+      error: `Portions sum (${portionSum}) must equal |delta| (${Math.abs(delta)})`,
+    });
+  }
+
+  // For negative delta: validate no portion exceeds what's in the account for that purpose
+  if (delta < 0) {
+    const currentInAccountStmt = db.prepare(
+      `SELECT COALESCE(SUM(s.amount), 0) AS total
+       FROM allocation_slices s
+       JOIN slice_dimensions sd1 ON sd1.slice_id = s.id AND sd1.dimension_value_id = ?
+       JOIN slice_dimensions sd2 ON sd2.slice_id = s.id AND sd2.dimension_value_id = ?
+       WHERE s.fund_id = ?`
+    );
+    for (const t of transfers) {
+      const avail = currentInAccountStmt.get(accountDvId, t.purposeId, FUND_ID).total;
+      if (t.portion > avail) {
+        return res.status(400).json({
+          error: `Reduction of ${t.portion} exceeds available ${avail} for purposeId ${t.purposeId}`,
+        });
+      }
     }
   }
 
   try {
-    const newFundTotal = executeAccountRebalance(accountDvId, transfers, FUND_ID);
+    const accountLabel = getDvLabel(accountDvId);
+    const newFundTotal = executeAccountRebalance(accountDvId, transfers, delta, FUND_ID);
+
+    addHistory({
+      type: 'account_rebalance',
+      accountId: accountDvId,
+      accountLabel,
+      oldTotal: currentTotal,
+      newTotal,
+      delta,
+      transfers: transfers.map((t) => ({
+        purposeId: t.purposeId,
+        purposeLabel: getDvLabel(t.purposeId),
+        portion: t.portion,
+      })),
+    });
+
     res.json({ ok: true, fundTotal: newFundTotal });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -202,22 +324,25 @@ app.post('/api/purposes/:id/transfer', (req, res) => {
     return res.status(400).json({ error: 'source and target must differ' });
   }
 
-  // Validate source has enough
-  const sourceTotal = db
-    .prepare(
-      `SELECT COALESCE(SUM(s.amount), 0) AS total
-       FROM allocation_slices s
-       JOIN slice_dimensions sd ON sd.slice_id = s.id AND sd.dimension_value_id = ?
-       WHERE s.fund_id = ?`
-    )
-    .get(sourcePurposeId, FUND_ID).total;
-
+  const sourceTotal = getPurposeTotal(sourcePurposeId);
   if (amount > sourceTotal) {
     return res.status(400).json({ error: `Insufficient balance: ${sourceTotal} cents available` });
   }
 
   try {
+    const fromLabel = getDvLabel(sourcePurposeId);
+    const toLabel = getDvLabel(targetPurposeId);
     executePurposeTransfer(sourcePurposeId, targetPurposeId, amount, FUND_ID);
+
+    addHistory({
+      type: 'purpose_transfer',
+      fromId: sourcePurposeId,
+      fromLabel,
+      toId: targetPurposeId,
+      toLabel,
+      amount,
+    });
+
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });

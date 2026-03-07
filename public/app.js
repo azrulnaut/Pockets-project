@@ -24,6 +24,22 @@ function parseDollars(str) {
   return Math.round(v * 100);
 }
 
+function fmtTime(iso) {
+  const d = new Date(iso);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+// ---------------------------------------------------------------------------
+// Debounce
+// ---------------------------------------------------------------------------
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Toast
 // ---------------------------------------------------------------------------
@@ -51,10 +67,44 @@ async function api(method, path, body) {
 // ---------------------------------------------------------------------------
 async function loadState() {
   try {
-    state = await api('GET', '/api/state');
+    [state] = await Promise.all([
+      api('GET', '/api/state'),
+    ]);
     render();
+    renderHistory();
   } catch (e) {
     showToast('Failed to load state: ' + e.message);
+  }
+}
+
+async function renderHistory() {
+  try {
+    const history = await api('GET', '/api/history');
+    const list = document.getElementById('history-list');
+    if (!history.length) {
+      list.innerHTML = '<div class="history-empty">No rebalances yet.</div>';
+      return;
+    }
+    list.innerHTML = history.map(h => {
+      if (h.type === 'account_rebalance') {
+        const sign = h.delta > 0 ? '+' : '';
+        const details = h.transfers
+          .map(t => `${t.purposeLabel}: ${h.delta > 0 ? '+' : '−'}${fmt(t.portion)}`)
+          .join(' &nbsp;·&nbsp; ');
+        return `<div class="history-row rebalance">
+          <div class="h-time">${fmtTime(h.timestamp)}</div>
+          <div class="h-main">Account Rebalance — ${esc(h.accountLabel)} &nbsp; ${fmt(h.oldTotal)} → ${fmt(h.newTotal)} &nbsp;(${sign}${fmt(h.delta)})</div>
+          <div class="h-detail">${details}</div>
+        </div>`;
+      } else {
+        return `<div class="history-row transfer">
+          <div class="h-time">${fmtTime(h.timestamp)}</div>
+          <div class="h-main">Purpose Transfer — ${esc(h.fromLabel)} → ${esc(h.toLabel)} &nbsp; ${fmt(h.amount)}</div>
+        </div>`;
+      }
+    }).join('');
+  } catch (e) {
+    // silently ignore history errors
   }
 }
 
@@ -64,20 +114,8 @@ function render() {
   document.getElementById('fund-name').textContent = state.fund.name;
   document.getElementById('fund-total').textContent = fmt(state.fund.total_amount);
 
-  renderDimension(
-    'accounts-list',
-    state.accounts,
-    'a',
-    expandedAccounts,
-    renderAccountRow
-  );
-  renderDimension(
-    'purposes-list',
-    state.purposes,
-    'p',
-    expandedPurposes,
-    renderPurposeRow
-  );
+  renderDimension('accounts-list', state.accounts, 'a', expandedAccounts, renderAccountRow);
+  renderDimension('purposes-list', state.purposes, 'p', expandedPurposes, renderPurposeRow);
 }
 
 function renderDimension(containerId, items, prefix, expandedSet, rowFn) {
@@ -95,7 +133,6 @@ function renderDimension(containerId, items, prefix, expandedSet, rowFn) {
   for (const item of items) {
     const key = `${prefix}-${item.id}`;
 
-    // Main row
     const row = document.createElement('div');
     row.className = 'dv-row';
     row.dataset.key = key;
@@ -110,7 +147,6 @@ function renderDimension(containerId, items, prefix, expandedSet, rowFn) {
     `;
     container.appendChild(row);
 
-    // Slices (if expanded)
     if (expandedSet.has(key)) {
       const slices = sliceCache[key];
       const sliceContainer = document.createElement('div');
@@ -118,7 +154,6 @@ function renderDimension(containerId, items, prefix, expandedSet, rowFn) {
       sliceContainer.id = `slices-${key}`;
 
       if (!slices) {
-        // Will populate after fetch
         sliceContainer.innerHTML = '<div class="slice-row empty">Loading…</div>';
       } else if (slices.length === 0) {
         sliceContainer.innerHTML = '<div class="slice-row empty">No slices.</div>';
@@ -140,14 +175,14 @@ function renderDimension(containerId, items, prefix, expandedSet, rowFn) {
 
 function renderAccountRow(item) {
   return `
-    <button class="btn-rename" onclick="openRenameModal('account', ${item.id}, '${esc(item.label)}')">Rename</button>
+    <button class="btn-edit" onclick="openEditModal('account', ${item.id}, '${esc(item.label)}')">Edit</button>
     <button class="btn-action" onclick="openRebalanceModal(${item.id}, '${esc(item.label)}', ${item.total})">Rebal.</button>
   `;
 }
 
 function renderPurposeRow(item) {
   return `
-    <button class="btn-rename" onclick="openRenameModal('purpose', ${item.id}, '${esc(item.label)}')">Rename</button>
+    <button class="btn-edit" onclick="openEditModal('purpose', ${item.id}, '${esc(item.label)}')">Edit</button>
     <button class="btn-action" onclick="openTransferModal(${item.id}, '${esc(item.label)}', ${item.total})">Transfer</button>
   `;
 }
@@ -166,7 +201,7 @@ async function toggleExpand(key, prefix, dvId) {
   }
 
   expandedSet.add(key);
-  render(); // show loading
+  render();
 
   try {
     const apiPath = prefix === 'a'
@@ -219,7 +254,7 @@ function openAddModal(type) {
     `Add ${label}`,
     `<div class="form-row">
        <label>Name</label>
-       <input id="add-label" type="text" placeholder="${label} name" autofocus>
+       <input id="add-label" type="text" placeholder="${label} name">
      </div>`,
     `<button class="btn-cancel" onclick="closeModal()">Cancel</button>
      <button class="btn-primary" onclick="submitAdd('${type}')">Add</button>`
@@ -241,32 +276,55 @@ async function submitAdd(type) {
 }
 
 // ---------------------------------------------------------------------------
-// Rename modal
+// Edit modal (rename + delete)
 // ---------------------------------------------------------------------------
-function openRenameModal(type, id, currentLabel) {
+function openEditModal(type, id, currentLabel) {
   const label = type === 'account' ? 'Account' : 'Purpose';
   openModal(
-    `Rename ${label}`,
+    `Edit ${label}: ${currentLabel}`,
     `<div class="form-row">
-       <label>New name</label>
-       <input id="rename-label" type="text" value="${esc(currentLabel)}">
+       <label>Name</label>
+       <input id="edit-label" type="text" value="${esc(currentLabel)}">
      </div>`,
-    `<button class="btn-cancel" onclick="closeModal()">Cancel</button>
-     <button class="btn-primary" onclick="submitRename('${type}', ${id})">Save</button>`
+    `<div class="modal-actions-split">
+       <button class="btn-danger" onclick="confirmDelete('${type}', ${id}, '${esc(currentLabel)}')">Delete ${label}</button>
+       <div style="display:flex;gap:10px">
+         <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+         <button class="btn-primary" onclick="submitEdit('${type}', ${id})">Save</button>
+       </div>
+     </div>`
   );
   setTimeout(() => {
-    const inp = document.getElementById('rename-label');
+    const inp = document.getElementById('edit-label');
     if (inp) { inp.focus(); inp.select(); }
   }, 50);
 }
 
-async function submitRename(type, id) {
-  const label = document.getElementById('rename-label').value.trim();
+async function submitEdit(type, id) {
+  const label = document.getElementById('edit-label').value.trim();
   if (!label) return showToast('Name is required');
   const path = type === 'account' ? `/api/accounts/${id}` : `/api/purposes/${id}`;
   try {
     await api('PATCH', path, { label });
-    // Invalidate slice cache for this dv since label changed elsewhere
+    Object.keys(sliceCache).forEach(k => delete sliceCache[k]);
+    closeModal();
+    await loadState();
+  } catch (e) {
+    showToast(e.message);
+  }
+}
+
+async function confirmDelete(type, id, label) {
+  const noun = type === 'account' ? 'account' : 'purpose';
+  if (!confirm(`Delete "${label}"?\n\nThis will permanently delete all its slices.`)) return;
+  const path = type === 'account' ? `/api/accounts/${id}` : `/api/purposes/${id}`;
+  try {
+    await api('DELETE', path);
+    // Remove from expanded sets and cache
+    const key = (type === 'account' ? 'a' : 'p') + '-' + id;
+    expandedAccounts.delete(key);
+    expandedPurposes.delete(key);
+    delete sliceCache[key];
     Object.keys(sliceCache).forEach(k => delete sliceCache[k]);
     closeModal();
     await loadState();
@@ -278,7 +336,7 @@ async function submitRename(type, id) {
 // ---------------------------------------------------------------------------
 // Rebalance modal
 // ---------------------------------------------------------------------------
-let rebalState = null; // { accountId, accountLabel, currentTotal, candidates }
+let rebalState = null;
 
 function openRebalanceModal(accountId, accountLabel, currentTotal) {
   rebalState = { accountId, accountLabel, currentTotal, candidates: null };
@@ -291,34 +349,39 @@ function openRebalanceModal(accountId, accountLabel, currentTotal) {
      <div class="form-row">
        <label>New total ($)</label>
        <input id="rebal-new-total" type="number" min="0" step="0.01"
-              value="${(currentTotal / 100).toFixed(2)}"
-              oninput="rebalTotalChanged()">
+              value="${(currentTotal / 100).toFixed(2)}">
      </div>
      <div id="rebal-candidates"></div>`,
     `<button class="btn-cancel" onclick="closeModal()">Cancel</button>
      <button class="btn-primary" id="rebal-confirm" onclick="submitRebalance()" disabled>Confirm</button>`
   );
+
+  // Wire up debounced input handler after DOM is ready
   setTimeout(() => {
     const inp = document.getElementById('rebal-new-total');
-    if (inp) { inp.focus(); inp.select(); }
+    if (!inp) return;
+    inp.focus();
+    inp.select();
+    inp.addEventListener('input', debounce(rebalTotalChanged, 400));
   }, 50);
 }
 
 async function rebalTotalChanged() {
   const inp = document.getElementById('rebal-new-total');
   const cents = parseDollars(inp?.value);
+  const cand = document.getElementById('rebal-candidates');
+  if (!cand) return;
+
   if (cents === null) {
-    document.getElementById('rebal-candidates').innerHTML = '';
+    cand.innerHTML = '';
     return;
   }
   if (cents === rebalState.currentTotal) {
-    document.getElementById('rebal-candidates').innerHTML =
-      '<div class="info-box">No change.</div>';
+    cand.innerHTML = '<div class="info-box">No change.</div>';
     document.getElementById('rebal-confirm').disabled = true;
     return;
   }
 
-  const cand = document.getElementById('rebal-candidates');
   cand.innerHTML = '<div class="info-box">Loading…</div>';
 
   try {
@@ -335,7 +398,6 @@ async function rebalTotalChanged() {
 
 function renderCandidates(data) {
   const { delta, purposes } = data;
-  const sign = delta > 0 ? '+' : '';
   const cand = document.getElementById('rebal-candidates');
 
   if (delta === 0) {
@@ -344,55 +406,67 @@ function renderCandidates(data) {
     return;
   }
 
-  let html = `<div class="info-box">Delta: <strong>${sign}${fmt(delta)}</strong></div>`;
+  const absDelta = Math.abs(delta);
+  const sign = delta > 0 ? '+' : '−';
+  const action = delta > 0 ? 'Add to' : 'Reduce from';
+  const availKey = delta > 0 ? null : 'currentInAccount'; // for delta<0, cap per row
+
+  let html = `<div class="info-box">
+    Delta: <strong>${sign}${fmt(absDelta)}</strong>
+    &nbsp;—&nbsp; ${delta > 0 ? 'Distribute additions across purposes' : 'Distribute reductions across purposes (max = current in account)'}
+  </div>`;
 
   if (purposes.length === 0) {
-    cand.innerHTML = html + '<div class="info-box">No purposes defined. Add purposes first.</div>';
+    cand.innerHTML = html + '<div class="info-box">No eligible purposes.</div>';
     document.getElementById('rebal-confirm').disabled = true;
     return;
   }
 
-  html += `<p style="font-size:12px;color:#666;margin-bottom:8px">
-    Distribute the delta across purposes (must sum to ${fmt(Math.abs(delta))}):
-  </p>`;
   html += '<div class="purpose-grid">';
   for (const p of purposes) {
-    const avail = delta > 0
-      ? `${fmt(p.donatable)} available`
-      : `${fmt(p.total)} in account`;
+    const maxVal = delta < 0 ? (p.currentInAccount / 100).toFixed(2) : '';
+    const maxAttr = delta < 0 ? `max="${maxVal}"` : '';
+    const availLabel = delta > 0
+      ? `total: ${fmt(p.total)}`
+      : `in account: ${fmt(p.currentInAccount)}`;
     html += `
       <div class="purpose-grid-row">
         <span class="pg-label">${esc(p.label)}</span>
-        <span class="pg-avail">${avail}</span>
-        <input type="number" min="0" step="0.01" value="0"
+        <span class="pg-avail">${availLabel}</span>
+        <input type="number" min="0" step="0.01" value="0" ${maxAttr}
                data-purpose-id="${p.id}"
-               oninput="updateRebalSum()">
+               oninput="updateRebalRemainder()">
       </div>`;
   }
   html += '</div>';
-  html += `<div class="sum-row" id="rebal-sum-row">
-    Sum: <span id="rebal-sum">$0.00</span> / <strong>${fmt(Math.abs(delta))}</strong>
+
+  html += `<div class="remainder-row nonzero" id="rebal-remainder-row">
+    <span class="rem-label">Remaining to allocate</span>
+    <span class="rem-value" id="rebal-remainder">${fmt(absDelta)}</span>
   </div>`;
 
   cand.innerHTML = html;
-  updateRebalSum();
+  updateRebalRemainder();
 }
 
-function updateRebalSum() {
+function updateRebalRemainder() {
   const inputs = document.querySelectorAll('.purpose-grid-row input[type="number"]');
-  let sum = 0;
+  let allocated = 0;
   for (const inp of inputs) {
-    sum += Math.round(parseFloat(inp.value || 0) * 100);
+    allocated += Math.round(parseFloat(inp.value || 0) * 100);
   }
-  const target = Math.abs(rebalState.candidates?.delta || 0);
-  const sumEl = document.getElementById('rebal-sum');
-  const rowEl = document.getElementById('rebal-sum-row');
-  if (sumEl) sumEl.textContent = fmt(sum);
+  const absDelta = Math.abs(rebalState.candidates?.delta || 0);
+  const remainder = absDelta - allocated;
+
+  const remEl = document.getElementById('rebal-remainder');
+  const rowEl = document.getElementById('rebal-remainder-row');
+  if (remEl) remEl.textContent = fmt(Math.max(0, remainder));
   if (rowEl) {
-    rowEl.className = 'sum-row ' + (sum === target ? 'match' : 'mismatch');
+    rowEl.className = 'remainder-row ' + (remainder === 0 ? 'zero' : 'nonzero');
   }
+
   const confirmBtn = document.getElementById('rebal-confirm');
-  if (confirmBtn) confirmBtn.disabled = sum !== target;
+  if (confirmBtn) confirmBtn.disabled = remainder !== 0;
 }
 
 async function submitRebalance() {
@@ -406,9 +480,14 @@ async function submitRebalance() {
   }
   if (transfers.length === 0) return showToast('No transfers specified');
 
+  const newTotal = parseDollars(document.getElementById('rebal-new-total')?.value);
+  if (newTotal === null) return showToast('Invalid new total');
+
   try {
-    await api('POST', `/api/accounts/${rebalState.accountId}/rebalance`, { transfers });
-    // Invalidate all slice caches since rebalance moves slices around
+    await api('POST', `/api/accounts/${rebalState.accountId}/rebalance`, {
+      newTotal,
+      transfers,
+    });
     Object.keys(sliceCache).forEach(k => delete sliceCache[k]);
     closeModal();
     await loadState();

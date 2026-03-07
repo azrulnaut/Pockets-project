@@ -52,7 +52,7 @@ function getDimensionTotals(dimId, fundId = 1) {
 }
 
 function getSlicesForDimensionValue(dvId, otherDimId, fundId = 1) {
-  // Correlated subqueries avoid duplicate rows from the multi-tag LEFT JOIN
+  // Correlated subqueries avoid duplicate rows from multi-tag LEFT JOIN
   return db
     .prepare(
       `SELECT s.id, s.amount,
@@ -80,23 +80,7 @@ const stmts = {
      JOIN slice_dimensions sd2 ON sd2.slice_id = s.id AND sd2.dimension_value_id = :b
      WHERE s.fund_id = :f LIMIT 1`
   ),
-  findDonorSlices: db.prepare(
-    `SELECT s.id, s.amount FROM allocation_slices s
-     JOIN slice_dimensions sd1 ON sd1.slice_id = s.id AND sd1.dimension_value_id = :purposeId
-     WHERE s.fund_id = :fundId
-       AND NOT EXISTS (
-         SELECT 1 FROM slice_dimensions sd2
-         WHERE sd2.slice_id = s.id AND sd2.dimension_value_id = :accountDvId
-       )
-     ORDER BY s.amount DESC`
-  ),
   findSlicesForPurpose: db.prepare(
-    `SELECT s.id, s.amount FROM allocation_slices s
-     JOIN slice_dimensions sd ON sd.slice_id = s.id AND sd.dimension_value_id = ?
-     WHERE s.fund_id = ?
-     ORDER BY s.amount DESC`
-  ),
-  findSlicesForAccount: db.prepare(
     `SELECT s.id, s.amount FROM allocation_slices s
      JOIN slice_dimensions sd ON sd.slice_id = s.id AND sd.dimension_value_id = ?
      WHERE s.fund_id = ?
@@ -129,35 +113,39 @@ const stmts = {
 // Transactions
 // ---------------------------------------------------------------------------
 
-const executeAccountRebalance = db.transaction((accountDvId, transfers, fundId = 1) => {
+/**
+ * Rebalance an account to a new total.
+ * delta > 0: create/grow slices for (accountDvId + purposeId); fund total grows.
+ * delta < 0: shrink/delete slices for (accountDvId + purposeId); fund total shrinks.
+ * Other accounts are never touched.
+ *
+ * transfers: [{ purposeId, portion }] — portions are always positive; sign is
+ * determined by delta.
+ */
+const executeAccountRebalance = db.transaction((accountDvId, transfers, delta, fundId = 1) => {
   for (const { purposeId, portion } of transfers) {
-    // Shrink donor slices (same purpose, different account)
-    let remaining = portion;
-    const donors = stmts.findDonorSlices.all({
-      purposeId,
-      fundId,
-      accountDvId,
-    });
-    for (const donor of donors) {
-      if (remaining <= 0) break;
-      const take = Math.min(donor.amount, remaining);
-      if (take === donor.amount) {
-        stmts.deleteSlice.run(donor.id);
-      } else {
-        stmts.addToSlice.run(-take, donor.id);
-      }
-      remaining -= take;
-    }
-    // remaining > 0 → new money; fund total will grow after syncFundTotal
-
-    // Grow or create target slice (accountDvId + purposeId)
     const target = stmts.findSliceByTwoDvs.get({ a: accountDvId, b: purposeId, f: fundId });
-    if (target) {
-      stmts.addToSlice.run(portion, target.id);
-    } else {
-      const { lastInsertRowid } = stmts.insertSlice.run(fundId, portion);
-      stmts.insertSliceDim.run(lastInsertRowid, accountDvId);
-      stmts.insertSliceDim.run(lastInsertRowid, purposeId);
+
+    if (delta > 0) {
+      // Adding money to this account under this purpose
+      if (target) {
+        stmts.addToSlice.run(portion, target.id);
+      } else {
+        const { lastInsertRowid } = stmts.insertSlice.run(fundId, portion);
+        stmts.insertSliceDim.run(lastInsertRowid, accountDvId);
+        stmts.insertSliceDim.run(lastInsertRowid, purposeId);
+      }
+    } else if (delta < 0) {
+      // Removing money from this account under this purpose
+      if (target) {
+        const newAmount = target.amount - portion;
+        if (newAmount <= 0) {
+          stmts.deleteSlice.run(target.id);
+        } else {
+          stmts.addToSlice.run(-portion, target.id);
+        }
+      }
+      // If no slice exists, nothing to reduce — safe to skip
     }
   }
   return syncFundTotal(fundId);
