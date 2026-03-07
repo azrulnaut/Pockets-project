@@ -35,7 +35,7 @@ CREATE INDEX idx_dv_dimension ON dimension_values(dimension_id);
 CREATE TABLE allocation_slices (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     fund_id    INTEGER NOT NULL REFERENCES funds(id) ON DELETE CASCADE,
-    amount     INTEGER NOT NULL CHECK (amount > 0),
+    amount     INTEGER NOT NULL CHECK (amount >= 0),
     note       TEXT,
     created_at TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT    NOT NULL DEFAULT (datetime('now'))

@@ -1,0 +1,13 @@
+{
+  "name": "financial-allocations-db",
+  "version": "1.0.0",
+  "description": "Web prototype for multidimensional financial allocations",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.6.2",
+    "express": "^4.18.2"
+  }
+}

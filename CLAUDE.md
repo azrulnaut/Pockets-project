@@ -11,6 +11,12 @@ SQLite schema for a mobile app that partitions fund amounts into atomic slices, 
 | `schema.sql` | DDL: all tables, indexes, and seed data. Run once on DB init. |
 | `queries.sql` | All app query patterns and the full rebalance workflow (Steps 1–5). |
 | `verify.sql` | End-to-end verification script for manual testing. |
+| `server.js` | Express REST API server (all routes). |
+| `db.js` | DB init, schema load, seed, query helpers, transaction functions. |
+| `public/index.html` | Single-page UI shell. |
+| `public/style.css` | Minimal styles. |
+| `public/app.js` | Frontend JS: fetch calls, DOM rendering, modals. |
+| `package.json` | Node dependencies: express, better-sqlite3. |
 
 ## Key Design Decisions
 
@@ -23,7 +29,7 @@ SQLite schema for a mobile app that partitions fund amounts into atomic slices, 
 
 | Constraint | Layer | Reason |
 |---|---|---|
-| `amount > 0` CHECK | DB | Always valid, cheap |
+| `amount >= 0` CHECK | DB | Zero allowed mid-transaction; zero-amount slices deleted after rebalance |
 | `(dimension_id, label)` UNIQUE | DB | Data integrity |
 | `(slice_id, dimension_value_id)` UNIQUE | DB | Prevents duplicates |
 | Dimensions are read-only to users | App | No DELETE/INSERT on `dimensions` exposed in UI |
@@ -76,6 +82,36 @@ Expected results:
 - Step 4: Rent=50000, Food=30000, Transport=20000; sum=100000
 - Step 6: Rent=60000, Food=20000, Transport=20000; sum=100000
 - Steps 7 & 8: FK RESTRICT errors (expected and correct)
+
+## Web Prototype
+
+Stack: Node.js + Express + better-sqlite3, vanilla JS frontend.
+
+```bash
+npm install
+node server.js     # → http://localhost:3000
+```
+
+- `db.js` opens `app.db`, runs `schema.sql` once (if tables absent), seeds default fund.
+- All amounts are cents (integers). Frontend divides by 100 for display, multiplies on send.
+- `executeAccountRebalance(accountDvId, transfers, fundId)` — wrapped in a better-sqlite3 transaction; shrinks donor slices then grows/creates target slice (Option A/B).
+- `executePurposeTransfer(sourcePurposeId, targetPurposeId, amount, fundId)` — moves money between purposes, fund total unchanged.
+- `syncFundTotal()` — called after every write; sets `funds.total_amount = SUM(slices.amount)`.
+
+### API Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/state` | Fund total, accounts with totals, purposes with totals |
+| GET | `/api/accounts/:id/slices` | Expanded slice breakdown for one account |
+| GET | `/api/purposes/:id/slices` | Expanded slice breakdown for one purpose |
+| POST | `/api/accounts` | Add account `{ label }` |
+| POST | `/api/purposes` | Add purpose `{ label }` |
+| PATCH | `/api/accounts/:id` | Rename account `{ label }` |
+| PATCH | `/api/purposes/:id` | Rename purpose `{ label }` |
+| GET | `/api/accounts/:id/rebalance-candidates?newTotal=N` | Delta + purposes with donatable amounts |
+| POST | `/api/accounts/:id/rebalance` | Execute rebalance `{ transfers: [{purposeId, portion}] }` |
+| POST | `/api/purposes/:id/transfer` | Transfer between purposes `{ targetPurposeId, amount }` |
 
 ## Workflow for Future Changes
 

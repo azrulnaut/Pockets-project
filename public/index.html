@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Financial Allocations</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <div class="fund-header">
+      <h1 id="fund-name">My Fund</h1>
+      <span class="fund-total" id="fund-total">$0.00</span>
+    </div>
+
+    <!-- Accounts section -->
+    <div class="section">
+      <div class="section-header">
+        <h2>Accounts</h2>
+        <button class="btn-add" onclick="openAddModal('account')">+ Add</button>
+      </div>
+      <div id="accounts-list"></div>
+    </div>
+
+    <!-- Purposes section -->
+    <div class="section">
+      <div class="section-header">
+        <h2>Purpose</h2>
+        <button class="btn-add" onclick="openAddModal('purpose')">+ Add</button>
+      </div>
+      <div id="purposes-list"></div>
+    </div>
+  </div>
+
+  <!-- Modal overlay -->
+  <div class="modal-overlay" id="modal-overlay" onclick="handleOverlayClick(event)">
+    <div class="modal" id="modal">
+      <h3 id="modal-title"></h3>
+      <div id="modal-body"></div>
+      <div class="modal-actions" id="modal-actions"></div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
