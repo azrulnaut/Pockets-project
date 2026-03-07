@@ -149,6 +149,39 @@ const executeAccountRebalance = db.transaction((accountDvId, transfers, fundId =
   return syncFundTotal(fundId);
 });
 
+/**
+ * Move money from one account to another, preserving purpose tags.
+ * For each { purposeId, portion }: shrink source slice, grow/create target slice.
+ * Fund total is unchanged (net zero).
+ */
+const executeAccountTransfer = db.transaction((sourceAccountDvId, targetAccountDvId, transfers, fundId = 1) => {
+  for (const { purposeId, portion } of transfers) {
+    if (portion === 0) continue;
+
+    // Shrink / delete source slice
+    const source = stmts.findSliceByTwoDvs.get({ a: sourceAccountDvId, b: purposeId, f: fundId });
+    if (source) {
+      const newAmount = source.amount - portion;
+      if (newAmount <= 0) {
+        stmts.deleteSlice.run(source.id);
+      } else {
+        stmts.addToSlice.run(-portion, source.id);
+      }
+    }
+
+    // Grow / create target slice
+    const target = stmts.findSliceByTwoDvs.get({ a: targetAccountDvId, b: purposeId, f: fundId });
+    if (target) {
+      stmts.addToSlice.run(portion, target.id);
+    } else {
+      const { lastInsertRowid } = stmts.insertSlice.run(fundId, portion);
+      stmts.insertSliceDim.run(lastInsertRowid, targetAccountDvId);
+      stmts.insertSliceDim.run(lastInsertRowid, purposeId);
+    }
+  }
+  return syncFundTotal(fundId); // net zero, but keeps total_amount accurate
+});
+
 const executePurposeTransfer = db.transaction(
   (sourcePurposeId, targetPurposeId, amount, fundId = 1) => {
     let remaining = amount;
@@ -195,6 +228,7 @@ module.exports = {
   getDimensionTotals,
   getSlicesForDimensionValue,
   executeAccountRebalance,
+  executeAccountTransfer,
   executePurposeTransfer,
   stmts,
 };

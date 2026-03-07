@@ -104,8 +104,9 @@ button:hover { opacity: 0.85; }
 .btn-danger  { background: #fde8e8; color: #8a0000; }
 .btn-primary { background: #1a1a2e; color: #fff; padding: 8px 18px; font-size: 14px; }
 .btn-cancel  { background: #eee; color: #333; padding: 8px 18px; font-size: 14px; }
-.btn-deposit { background: #e8f4e8; color: #2d6a2d; font-weight: 700; padding: 10px 40px; font-size: 15px; border-radius: 6px; }
-.btn-spend   { background: #fde8e8; color: #8a0000; font-weight: 700; padding: 10px 40px; font-size: 15px; border-radius: 6px; }
+.btn-deposit  { background: #e8f4e8; color: #2d6a2d; font-weight: 700; padding: 10px 36px; font-size: 15px; border-radius: 6px; }
+.btn-transfer { background: #e8eef8; color: #1a3a8a; font-weight: 700; padding: 10px 36px; font-size: 15px; border-radius: 6px; }
+.btn-spend    { background: #fde8e8; color: #8a0000; font-weight: 700; padding: 10px 36px; font-size: 15px; border-radius: 6px; }
 
 /* ── Action bar (Deposit / Spend) ── */
 .action-bar-section {

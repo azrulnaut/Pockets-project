@@ -338,12 +338,12 @@ function renderCandidates(data) {
   let html = '<div class="purpose-grid">';
   for (const p of purposes) {
     html += `
-      <div class="purpose-grid-row" id="pgr-${p.id}" data-mode="">
+      <div class="purpose-grid-row row-plus" id="pgr-${p.id}" data-mode="+">
         <span class="pg-label">${esc(p.label)}</span>
         <span class="pg-current">${fmt(p.currentInAccount)}</span>
         <div class="mode-btns">
-          <button class="mode-btn mode-plus"  onclick="setRowMode(${p.id},'+')">+</button>
-          <button class="mode-btn mode-minus" onclick="setRowMode(${p.id},'-')">−</button>
+          <button class="mode-btn mode-plus active" onclick="setRowMode(${p.id},'+')">+</button>
+          <button class="mode-btn mode-minus"       onclick="setRowMode(${p.id},'-')">−</button>
         </div>
         <input type="number" min="0" step="0.01" value="" placeholder="0.00"
                data-purpose-id="${p.id}"
@@ -498,6 +498,134 @@ async function loadDepositSpendCandidates(mode) {
   } catch (e) {
     showToast(e.message);
     closeModal();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Account Transfer modal
+// ---------------------------------------------------------------------------
+function openTransferAccountModal() {
+  const accounts = state?.accounts || [];
+  if (accounts.length < 2) return showToast('Need at least 2 accounts to transfer between');
+
+  const opts = accounts
+    .map(a => `<option value="${a.id}" data-total="${a.total}">${esc(a.label)} (${fmt(a.total)})</option>`)
+    .join('');
+
+  openModal(
+    'Transfer Between Accounts',
+    `<div class="form-row">
+       <label>From account</label>
+       <select id="ta-source">${opts}</select>
+     </div>
+     <div class="form-row">
+       <label>To account</label>
+       <select id="ta-target">${opts}</select>
+     </div>`,
+    `<button class="btn-cancel" onclick="closeModal()">Cancel</button>
+     <button class="btn-primary" onclick="loadTransferCandidates()">Continue →</button>`
+  );
+  // Default target to second account so source ≠ target on open
+  setTimeout(() => {
+    const t = document.getElementById('ta-target');
+    if (t && t.options.length > 1) t.selectedIndex = 1;
+  }, 50);
+}
+
+async function loadTransferCandidates() {
+  const srcSel = document.getElementById('ta-source');
+  const tgtSel = document.getElementById('ta-target');
+  const sourceId    = parseInt(srcSel.value);
+  const targetId    = parseInt(tgtSel.value);
+  const sourceTotal = parseInt(srcSel.options[srcSel.selectedIndex].dataset.total);
+  const sourceLabel = srcSel.options[srcSel.selectedIndex].text.replace(/ \(.*\)$/, '');
+  const targetLabel = tgtSel.options[tgtSel.selectedIndex].text.replace(/ \(.*\)$/, '');
+
+  if (sourceId === targetId) return showToast('Source and target must be different accounts');
+  if (sourceTotal <= 0) return showToast(`${sourceLabel} has no balance to transfer`);
+
+  document.getElementById('modal-title').textContent = `Transfer: ${sourceLabel} → ${targetLabel}`;
+  document.getElementById('modal-body').innerHTML = `
+    <div class="info-box">
+      From <strong>${esc(sourceLabel)}</strong> (${fmt(sourceTotal)})
+      &nbsp;→&nbsp; <strong>${esc(targetLabel)}</strong>
+    </div>
+    <div id="acct-transfer-candidates"><div class="info-box">Loading…</div></div>`;
+  document.getElementById('modal-actions').innerHTML = `
+    <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+    <button class="btn-primary" id="acct-transfer-confirm"
+            onclick="submitAccountTransfer(${sourceId},${targetId})" disabled>Confirm</button>`;
+
+  try {
+    // Reuse rebalance-candidates endpoint — we only need currentInAccount per purpose
+    const data = await api('GET', `/api/accounts/${sourceId}/rebalance-candidates?newTotal=${sourceTotal}`);
+    const eligible = data.purposes.filter(p => p.currentInAccount > 0);
+    renderTransferCandidates(eligible);
+  } catch (e) {
+    showToast(e.message);
+    closeModal();
+  }
+}
+
+function renderTransferCandidates(purposes) {
+  const cand = document.getElementById('acct-transfer-candidates');
+  if (!cand) return;
+
+  if (purposes.length === 0) {
+    cand.innerHTML = '<div class="info-box">No allocated purposes in this account to transfer.</div>';
+    return;
+  }
+
+  let html = '<div class="purpose-grid">';
+  for (const p of purposes) {
+    html += `
+      <div class="purpose-grid-row row-plus" id="tpgr-${p.id}">
+        <span class="pg-label">${esc(p.label)}</span>
+        <span class="pg-current">${fmt(p.currentInAccount)}</span>
+        <input type="number" min="0" step="0.01" max="${(p.currentInAccount / 100).toFixed(2)}"
+               value="" placeholder="0.00"
+               data-purpose-id="${p.id}"
+               oninput="updateTransferTotal()">
+      </div>`;
+  }
+  html += '</div>';
+  html += `<div class="remainder-row nonzero" id="acct-transfer-total-row">
+    <span class="rem-label">Total to transfer</span>
+    <span class="rem-value" id="acct-transfer-total">$0.00</span>
+  </div>`;
+
+  cand.innerHTML = html;
+}
+
+function updateTransferTotal() {
+  const inputs = document.querySelectorAll('[id^="tpgr-"] input[type="number"]');
+  let total = 0;
+  for (const inp of inputs) total += Math.round(parseFloat(inp.value || 0) * 100);
+
+  const el  = document.getElementById('acct-transfer-total');
+  const row = document.getElementById('acct-transfer-total-row');
+  const btn = document.getElementById('acct-transfer-confirm');
+  if (el)  el.textContent = fmt(total);
+  if (row) row.className = 'remainder-row ' + (total > 0 ? 'zero' : 'nonzero');
+  if (btn) btn.disabled = total <= 0;
+}
+
+async function submitAccountTransfer(sourceId, targetId) {
+  const inputs = document.querySelectorAll('[id^="tpgr-"] input[type="number"]');
+  const transfers = [];
+  for (const inp of inputs) {
+    const portion = Math.round(parseFloat(inp.value || 0) * 100);
+    if (portion > 0) transfers.push({ purposeId: parseInt(inp.dataset.purposeId), portion });
+  }
+  if (transfers.length === 0) return showToast('Enter at least one amount to transfer');
+
+  try {
+    await api('POST', `/api/accounts/${sourceId}/transfer`, { targetAccountId: targetId, transfers });
+    Object.keys(sliceCache).forEach(k => delete sliceCache[k]);
+    closeModal();
+    await loadState();
+  } catch (e) {
+    showToast(e.message);
   }
 }
 

@@ -8,6 +8,7 @@ const {
   getDimensionTotals,
   getSlicesForDimensionValue,
   executeAccountRebalance,
+  executeAccountTransfer,
   executePurposeTransfer,
 } = require('./db');
 
@@ -255,6 +256,54 @@ app.post('/api/accounts/:id/rebalance', (req, res) => {
 
   try {
     const newFundTotal = executeAccountRebalance(accountDvId, transfers, FUND_ID);
+    res.json({ ok: true, fundTotal: newFundTotal });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/accounts/:id/transfer
+// { targetAccountId, transfers: [{ purposeId, portion }] }  (portions in cents, always positive)
+// ---------------------------------------------------------------------------
+app.post('/api/accounts/:id/transfer', (req, res) => {
+  const sourceAccountDvId = parseInt(req.params.id);
+  const { targetAccountId, transfers } = req.body;
+
+  if (!Number.isInteger(targetAccountId)) {
+    return res.status(400).json({ error: 'targetAccountId required' });
+  }
+  if (sourceAccountDvId === targetAccountId) {
+    return res.status(400).json({ error: 'Source and target accounts must differ' });
+  }
+  if (!Array.isArray(transfers) || transfers.length === 0) {
+    return res.status(400).json({ error: 'transfers array required' });
+  }
+  for (const t of transfers) {
+    if (!Number.isInteger(t.purposeId) || !Number.isInteger(t.portion) || t.portion <= 0) {
+      return res.status(400).json({ error: 'each transfer needs purposeId and positive portion' });
+    }
+  }
+
+  // Validate each portion doesn't exceed what the source account holds for that purpose
+  const currentInAccountStmt = db.prepare(
+    `SELECT COALESCE(SUM(s.amount), 0) AS total
+     FROM allocation_slices s
+     JOIN slice_dimensions sd1 ON sd1.slice_id = s.id AND sd1.dimension_value_id = ?
+     JOIN slice_dimensions sd2 ON sd2.slice_id = s.id AND sd2.dimension_value_id = ?
+     WHERE s.fund_id = ?`
+  );
+  for (const t of transfers) {
+    const avail = currentInAccountStmt.get(sourceAccountDvId, t.purposeId, FUND_ID).total;
+    if (t.portion > avail) {
+      return res.status(400).json({
+        error: `Transfer of ${t.portion} exceeds available ${avail} for purposeId ${t.purposeId}`,
+      });
+    }
+  }
+
+  try {
+    const newFundTotal = executeAccountTransfer(sourceAccountDvId, targetAccountId, transfers, FUND_ID);
     res.json({ ok: true, fundTotal: newFundTotal });
   } catch (e) {
     res.status(500).json({ error: e.message });
