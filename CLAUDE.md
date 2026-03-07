@@ -47,27 +47,8 @@ funds
 ```
 
 - Deleting a fund cascades to slices and their tags.
-- Deleting a dimension value is blocked (RESTRICT) if any slice references it — the app prompts the user to re-tag or delete referencing slices first.
+- Deleting a dimension value first deletes all slices that reference it, then removes the value.
 - Deleting a dimension row is blocked (RESTRICT) even via direct DB access.
-
-## Rebalance Workflow
-
-Triggered when the user edits the total for a balancing dimension value.
-
-1. **Compute delta** — `delta = new_target_total − current_total_for_dv`
-2. **Present candidates** — query other dimension values; app filters by ability to donate/receive
-3. **Find slices** — fetch slices for the chosen donor dimension value, ordered by amount DESC
-4. **Execute transfer** — inside a `BEGIN/COMMIT` transaction:
-   - Shrink donor slice by `portion`
-   - Either grow an existing target slice (Option A) or create a new one inheriting the donor's other dimension tags (Option B)
-   - Delete any zero-amount donor slice
-5. **Post-commit validation** — app queries `SUM(amount)` for the balancing dimension and alerts if it doesn't equal `funds.total_amount`
-
-### Option B — new slice id capture
-
-After `INSERT INTO allocation_slices`, capture the new row id **before** inserting into `slice_dimensions`:
-- **App code**: use `last_insert_rowid()` / the driver's insert-id method and bind it as `:new_slice_id`
-- **Raw SQL script**: use `(SELECT MAX(id) FROM allocation_slices)` inside the same transaction
 
 ## Running the Verification Script
 
@@ -94,24 +75,61 @@ node server.js     # → http://localhost:3000
 
 - `db.js` opens `app.db`, runs `schema.sql` once (if tables absent), seeds default fund.
 - All amounts are cents (integers). Frontend divides by 100 for display, multiplies on send.
-- `executeAccountRebalance(accountDvId, transfers, fundId)` — wrapped in a better-sqlite3 transaction; shrinks donor slices then grows/creates target slice (Option A/B).
-- `executePurposeTransfer(sourcePurposeId, targetPurposeId, amount, fundId)` — moves money between purposes, fund total unchanged.
 - `syncFundTotal()` — called after every write; sets `funds.total_amount = SUM(slices.amount)`.
+
+### Transaction Functions (db.js)
+
+| Function | Description |
+|---|---|
+| `executeAccountRebalance(accountDvId, transfers, fundId)` | Applies signed portions to account slices. `portion > 0` grows/creates; `portion < 0` shrinks/deletes. Other accounts untouched. Fund total changes by net delta. |
+| `executeAccountTransfer(sourceAccountDvId, targetAccountDvId, transfers, fundId)` | Moves money between accounts preserving purpose tags. Fund total unchanged. |
+| `executePurposeTransfer(sourcePurposeId, targetPurposeId, amount, fundId)` | Re-tags existing slices from one purpose to another. Fund total unchanged. |
 
 ### API Endpoints
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/state` | Fund total, accounts with totals, purposes with totals |
+| GET | `/api/state` | Fund total, all accounts with totals, all purposes with totals |
 | GET | `/api/accounts/:id/slices` | Expanded slice breakdown for one account |
 | GET | `/api/purposes/:id/slices` | Expanded slice breakdown for one purpose |
 | POST | `/api/accounts` | Add account `{ label }` |
 | POST | `/api/purposes` | Add purpose `{ label }` |
 | PATCH | `/api/accounts/:id` | Rename account `{ label }` |
 | PATCH | `/api/purposes/:id` | Rename purpose `{ label }` |
-| GET | `/api/accounts/:id/rebalance-candidates?newTotal=N` | Delta + purposes with donatable amounts |
-| POST | `/api/accounts/:id/rebalance` | Execute rebalance `{ transfers: [{purposeId, portion}] }` |
+| DELETE | `/api/accounts/:id` | Delete account and all its slices |
+| DELETE | `/api/purposes/:id` | Delete purpose and all its slices |
+| GET | `/api/accounts/:id/rebalance-candidates?newTotal=N` | All purposes with `currentInAccount`; delta computed from newTotal |
+| POST | `/api/accounts/:id/rebalance` | Execute rebalance `{ newTotal, transfers: [{purposeId, portion}] }` — portions are signed |
+| POST | `/api/accounts/:id/transfer` | Transfer between accounts `{ targetAccountId, transfers: [{purposeId, portion}] }` |
 | POST | `/api/purposes/:id/transfer` | Transfer between purposes `{ targetPurposeId, amount }` |
+
+### Rebalance Logic
+
+Account rebalancing operates only on the target account's slices — no other account is ever modified.
+
+- **`transfers`** is an array of `{ purposeId, portion }` where `portion` is a **signed integer** (cents).
+  - `portion > 0` → grow or create the `(account + purpose)` slice; fund total increases.
+  - `portion < 0` → shrink or delete the `(account + purpose)` slice; fund total decreases.
+- **`sum(portions) === delta`** is validated server-side (`delta = newTotal − currentTotal`).
+- **`delta = 0`** is valid — allows redistribution of purposes within an account without changing its total.
+- Negative portions are capped at `currentInAccount` for that purpose (validated server-side).
+
+### Account Transfer Logic
+
+- Transfers `portion` cents of a given purpose from source account to target account.
+- Each `portion` must be ≤ `currentInAccount` for the source.
+- Fund total is unchanged (net zero operation).
+- Purpose tags are preserved on the target (e.g. Checking/Rent → Savings/Rent).
+
+### UI Actions
+
+| Action | Trigger | Description |
+|---|---|---|
+| Rebalance | [Rebal.] on account row | Adjust account total and/or redistribute purposes. [+]/[−] toggle per purpose row; [+] active by default. |
+| Deposit | ↓ Deposit button | Enter delta amount + target account → purpose distribution screen. |
+| Transfer | ⇄ Transfer button | Pick source + target account → purpose grid showing source's allocations. |
+| Spend | ↑ Spend button | Enter delta amount + source account → purpose distribution screen. |
+| Edit | [Edit] on any row | Rename or delete the account/purpose (delete cascades to its slices). |
 
 ## Workflow for Future Changes
 
