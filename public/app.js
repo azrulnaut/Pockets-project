@@ -77,6 +77,7 @@ function render() {
 function renderDimension(containerId, items, prefix, expandedSet, rowFn) {
   const container = document.getElementById(containerId);
   container.innerHTML = '';
+  const type = prefix === 'a' ? 'account' : 'purpose';
 
   if (items.length === 0) {
     const empty = document.createElement('div');
@@ -93,6 +94,7 @@ function renderDimension(containerId, items, prefix, expandedSet, rowFn) {
     row.className = 'dv-row';
     row.onclick = () => toggleExpand(key, prefix, item.id);
     row.innerHTML = `
+      <span class="dot-btn-wrap" onclick="event.stopPropagation()"><button class="btn-dots" onclick="openEditModal('${type}',${item.id},'${esc(item.label)}')">⋯</button></span>
       <span class="toggle">${expandedSet.has(key) ? '▼' : '▶'}</span>
       <span class="label">${esc(item.label)}</span>
       <span class="amount">${fmt(item.total)}</span>
@@ -126,16 +128,11 @@ function renderDimension(containerId, items, prefix, expandedSet, rowFn) {
 }
 
 function renderAccountRow(item) {
-  return `
-    <button class="btn-edit" onclick="openEditModal('account',${item.id},'${esc(item.label)}')">Edit</button>
-    <button class="btn-action" onclick="openRebalanceModal(${item.id},'${esc(item.label)}',${item.total})">Rebal.</button>
-  `;
+  return `<button class="btn-action" onclick="openRebalanceModal(${item.id},'${esc(item.label)}',${item.total})">Update Amount</button>`;
 }
 
 function renderPurposeRow(item) {
-  return `
-    <button class="btn-edit" onclick="openEditModal('purpose',${item.id},'${esc(item.label)}')">Edit</button>
-  `;
+  return '';
 }
 
 // ---------------------------------------------------------------------------
@@ -335,15 +332,16 @@ function renderCandidates(data) {
     return;
   }
 
+  const defaultMode = delta < 0 ? '-' : '+';
   let html = '<div class="purpose-grid">';
   for (const p of purposes) {
     html += `
-      <div class="purpose-grid-row row-plus" id="pgr-${p.id}" data-mode="+">
+      <div class="purpose-grid-row ${defaultMode === '+' ? 'row-plus' : 'row-minus'}" id="pgr-${p.id}" data-mode="${defaultMode}">
         <span class="pg-label">${esc(p.label)}</span>
         <span class="pg-current">${fmt(p.currentInAccount)}</span>
         <div class="mode-btns">
-          <button class="mode-btn mode-plus active" onclick="setRowMode(${p.id},'+')">+</button>
-          <button class="mode-btn mode-minus"       onclick="setRowMode(${p.id},'-')">−</button>
+          <button class="mode-btn mode-plus ${defaultMode === '+' ? 'active' : ''}"  onclick="setRowMode(${p.id},'+')">+</button>
+          <button class="mode-btn mode-minus ${defaultMode === '-' ? 'active' : ''}" onclick="setRowMode(${p.id},'-')">−</button>
         </div>
         <input type="number" min="0" step="0.01" value="" placeholder="0.00"
                data-purpose-id="${p.id}"
@@ -364,17 +362,15 @@ function renderCandidates(data) {
   updateRebalRemainder();
 }
 
-// Toggle +/− mode on a purpose row
+// Toggle +/− mode on a purpose row (no neutral state)
 function setRowMode(purposeId, mode) {
   const row = document.getElementById(`pgr-${purposeId}`);
   if (!row) return;
-  const current = row.dataset.mode;
-  const next = current === mode ? '' : mode;
-  row.dataset.mode = next;
-  row.classList.toggle('row-plus',  next === '+');
-  row.classList.toggle('row-minus', next === '-');
-  row.querySelector('.mode-plus').classList.toggle('active',  next === '+');
-  row.querySelector('.mode-minus').classList.toggle('active', next === '-');
+  row.dataset.mode = mode;
+  row.classList.toggle('row-plus',  mode === '+');
+  row.classList.toggle('row-minus', mode === '-');
+  row.querySelector('.mode-plus').classList.toggle('active',  mode === '+');
+  row.querySelector('.mode-minus').classList.toggle('active', mode === '-');
   updateRebalRemainder();
 }
 

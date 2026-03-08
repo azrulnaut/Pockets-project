@@ -66,6 +66,7 @@ body {
 .dv-row:hover { background: #fafafa; }
 .dv-row:last-child { border-bottom: none; }
 
+.dv-row .dot-btn-wrap { flex-shrink: 0; margin-right: 2px; }
 .dv-row .toggle { width: 16px; color: #999; font-size: 10px; flex-shrink: 0; }
 .dv-row .label  { flex: 1; font-weight: 500; }
 .dv-row .amount { font-variant-numeric: tabular-nums; margin-right: 12px; color: #333; }
@@ -99,8 +100,9 @@ button {
 button:hover { opacity: 0.85; }
 
 .btn-add     { background: #e8f4e8; color: #2d6a2d; font-weight: 600; }
-.btn-edit    { background: #e8e8f8; color: #3a3a8a; }
-.btn-action  { background: #fff3e0; color: #8a5a00; }
+.btn-action  { background: #fff3e0; color: #8a5a00; padding: 4px 12px; }
+.btn-dots    { background: transparent; color: #aaa; font-size: 16px; padding: 2px 6px; letter-spacing: 1px; line-height: 1; }
+.btn-dots:hover { background: #ebebeb; color: #555; }
 .btn-danger  { background: #fde8e8; color: #8a0000; }
 .btn-primary { background: #1a1a2e; color: #fff; padding: 8px 18px; font-size: 14px; }
 .btn-cancel  { background: #eee; color: #333; padding: 8px 18px; font-size: 14px; }
