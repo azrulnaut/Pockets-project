@@ -94,11 +94,11 @@ function renderDimension(containerId, items, prefix, expandedSet, rowFn) {
     row.className = 'dv-row';
     row.onclick = () => toggleExpand(key, prefix, item.id);
     row.innerHTML = `
-      <span class="dot-btn-wrap" onclick="event.stopPropagation()"><button class="btn-dots" onclick="openEditModal('${type}',${item.id},'${esc(item.label)}')">⋯</button></span>
       <span class="toggle">${expandedSet.has(key) ? '▼' : '▶'}</span>
       <span class="label">${esc(item.label)}</span>
       <span class="amount">${fmt(item.total)}</span>
       <span class="actions" onclick="event.stopPropagation()">${rowFn(item)}</span>
+      <span class="dot-btn-wrap" onclick="event.stopPropagation()"><button class="btn-dots" onclick="openEditModal('${type}',${item.id},'${esc(item.label)}')">⚙</button></span>
     `;
     container.appendChild(row);
 
@@ -419,9 +419,19 @@ async function submitRebalance() {
 
   try {
     await api('POST', `/api/accounts/${rebalState.accountId}/rebalance`, { newTotal, transfers });
-    Object.keys(sliceCache).forEach(k => delete sliceCache[k]);
     closeModal();
     await loadState();
+    // Re-fetch slices for all expanded rows so they reflect updated data immediately
+    const fetches = [];
+    for (const key of expandedAccounts) {
+      const dvId = parseInt(key.slice(2));
+      fetches.push(api('GET', `/api/accounts/${dvId}/slices`).then(d => { sliceCache[key] = d; }).catch(() => { sliceCache[key] = []; }));
+    }
+    for (const key of expandedPurposes) {
+      const dvId = parseInt(key.slice(2));
+      fetches.push(api('GET', `/api/purposes/${dvId}/slices`).then(d => { sliceCache[key] = d; }).catch(() => { sliceCache[key] = []; }));
+    }
+    if (fetches.length > 0) { await Promise.all(fetches); render(); }
   } catch (e) {
     showToast(e.message);
   }
