@@ -132,6 +132,20 @@ Account rebalancing operates only on the target account's slices — no other ac
 | Spend | ↑ Spend button | Enter delta amount + source account → purpose distribution screen. |
 | Edit | [Edit] on any row | Rename or delete the account/purpose (delete cascades to its slices). |
 
+## UI v2 (Branch: `ui-v2`)
+
+A parallel UI experiment that shares the same Express backend and all `/api/...` routes.
+
+| Item | Detail |
+|---|---|
+| Branch | `ui-v2` |
+| Server entry | `src/server-v2.js` |
+| Static files | `public-v2/` |
+| Default port | `3001` (override with `PORT_V2` env var) |
+| Run command | `npm run start:v2` → `http://localhost:3001` |
+
+Only `src/server-v2.js` and `public-v2/` are branch-specific. All backend logic (`src/db.js`, `sql/`) is shared with `main`.
+
 ## Workflow for Future Changes
 
 1. Edit schema/query/verify files as needed.

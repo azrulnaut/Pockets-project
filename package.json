@@ -4,7 +4,8 @@
   "description": "Web prototype for multidimensional financial allocations",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "start:v2": "node src/server-v2.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.6.2",
