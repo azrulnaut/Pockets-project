@@ -135,4 +135,4 @@ Account rebalancing operates only on the target account's slices — no other ac
 
 1. Edit schema/query/verify files as needed.
 2. Claude will commit and push to the `main` branch on GitHub automatically when asked.
-3. The GitHub repo is: **azrulnaut/financial-allocations-db**
+3. The GitHub repo is: **azrulnaut/Pockets-project**

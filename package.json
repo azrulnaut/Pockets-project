@@ -1,5 +1,5 @@
 {
-  "name": "financial-allocations-db",
+  "name": "pockets-project",
   "version": "1.0.0",
   "description": "Web prototype for multidimensional financial allocations",
   "main": "server.js",
