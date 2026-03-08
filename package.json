@@ -2,9 +2,9 @@
   "name": "pockets-project",
   "version": "1.0.0",
   "description": "Web prototype for multidimensional financial allocations",
-  "main": "server.js",
+  "main": "src/server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node src/server.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.6.2",

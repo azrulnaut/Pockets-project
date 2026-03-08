@@ -14,7 +14,7 @@ const {
 
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, '../public')));
 
 const FUND_ID = 1;
 const DIM_ACCOUNTS = 1;

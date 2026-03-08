@@ -4,7 +4,7 @@ const Database = require('better-sqlite3');
 const fs = require('fs');
 const path = require('path');
 
-const db = new Database(path.join(__dirname, 'app.db'));
+const db = new Database(path.join(__dirname, '../data/app.db'));
 db.pragma('foreign_keys = ON');
 db.pragma('journal_mode = WAL');
 
@@ -14,7 +14,7 @@ const tableExists = db
   .get();
 
 if (!tableExists) {
-  const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+  const schema = fs.readFileSync(path.join(__dirname, '../sql/schema.sql'), 'utf8');
   db.exec(schema);
 }
 

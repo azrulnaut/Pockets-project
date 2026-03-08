@@ -8,14 +8,15 @@ SQLite schema for a mobile app that partitions fund amounts into atomic slices, 
 
 | File | Purpose |
 |---|---|
-| `schema.sql` | DDL: all tables, indexes, and seed data. Run once on DB init. |
-| `queries.sql` | All app query patterns and the full rebalance workflow (Steps 1–5). |
-| `verify.sql` | End-to-end verification script for manual testing. |
-| `server.js` | Express REST API server (all routes). |
-| `db.js` | DB init, schema load, seed, query helpers, transaction functions. |
+| `sql/schema.sql` | DDL: all tables, indexes, and seed data. Run once on DB init. |
+| `sql/queries.sql` | All app query patterns and the full rebalance workflow (Steps 1–5). |
+| `sql/verify.sql` | End-to-end verification script for manual testing. |
+| `src/server.js` | Express REST API server (all routes). |
+| `src/db.js` | DB init, schema load, seed, query helpers, transaction functions. |
 | `public/index.html` | Single-page UI shell. |
 | `public/style.css` | Minimal styles. |
 | `public/app.js` | Frontend JS: fetch calls, DOM rendering, modals. |
+| `data/` | Runtime SQLite DB files (gitignored). |
 | `package.json` | Node dependencies: express, better-sqlite3. |
 
 ## Key Design Decisions
@@ -54,8 +55,8 @@ funds
 
 ```bash
 # Requires sqlite3 CLI
-sqlite3 verify.db < schema.sql   # initialise
-sqlite3 verify.db < verify.sql   # run all 8 verification steps
+sqlite3 data/verify.db < sql/schema.sql   # initialise
+sqlite3 data/verify.db < sql/verify.sql   # run all 8 verification steps
 ```
 
 Expected results:
@@ -70,14 +71,14 @@ Stack: Node.js + Express + better-sqlite3, vanilla JS frontend.
 
 ```bash
 npm install
-node server.js     # → http://localhost:3000
+node src/server.js     # → http://localhost:3000
 ```
 
-- `db.js` opens `app.db`, runs `schema.sql` once (if tables absent), seeds default fund.
+- `src/db.js` opens `data/app.db`, runs `sql/schema.sql` once (if tables absent), seeds default fund.
 - All amounts are cents (integers). Frontend divides by 100 for display, multiplies on send.
 - `syncFundTotal()` — called after every write; sets `funds.total_amount = SUM(slices.amount)`.
 
-### Transaction Functions (db.js)
+### Transaction Functions (src/db.js)
 
 | Function | Description |
 |---|---|
